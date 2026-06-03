@@ -17,6 +17,9 @@ lightgbm==4.0.0
 shap==0.42.1
 statsmodels==0.14.0
 
+# Experiment Tracking
+mlflow==3.13.0
+
 # Jupyter & Development
 jupyter==1.0.0
 ipython==8.14.0

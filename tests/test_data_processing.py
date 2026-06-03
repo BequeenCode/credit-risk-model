@@ -1,5 +1,6 @@
 """
-Unit tests for the feature-engineering pipeline (Task 3).
+Unit tests for the feature-engineering pipeline (Task 3), the proxy target
+(Task 4), and the training helpers (Task 5).
 
 Run with:  pytest tests/ -v
 """
@@ -15,6 +16,7 @@ from src.data_processing import (
     build_proxy_target,
     load_raw_data,
 )
+from src.train import evaluate_model, get_model_search_specs, split_data
 
 
 @pytest.fixture
@@ -192,4 +194,58 @@ def test_proxy_target_missing_column_raises():
     df = pd.DataFrame({"employment_years": [1.0], "num_accounts": [2]})
     with pytest.raises(ValueError):
         build_proxy_target(df)  # 'income' column absent
+
+
+# ---------------------------------------------------------------------------
+# Task 5 - training helpers
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def processed_sample():
+    """A small processed-style frame with both target columns."""
+    rng = np.random.RandomState(0)
+    n = 60
+    return pd.DataFrame({
+        "feat_a": rng.normal(size=n),
+        "feat_b": rng.normal(size=n),
+        "feat_c": rng.normal(size=n),
+        "default": rng.randint(0, 2, size=n),
+        "is_high_risk": rng.randint(0, 2, size=n),
+    })
+
+
+def test_split_data_drops_all_targets(processed_sample):
+    X_train, X_test, y_train, y_test = split_data(processed_sample, target="default")
+    # Neither target may remain in the feature matrix (no leakage).
+    assert "default" not in X_train.columns
+    assert "is_high_risk" not in X_train.columns
+    assert y_train.name == "default"
+
+
+def test_split_data_is_reproducible(processed_sample):
+    first = split_data(processed_sample, target="default", random_state=1)
+    second = split_data(processed_sample, target="default", random_state=1)
+    pd.testing.assert_frame_equal(first[0], second[0])
+    pd.testing.assert_series_equal(first[2], second[2])
+
+
+def test_split_data_unknown_target_raises(processed_sample):
+    with pytest.raises(ValueError):
+        split_data(processed_sample, target="not_a_column")
+
+
+def test_get_model_search_specs_has_two_models():
+    specs = get_model_search_specs()
+    assert len(specs) >= 2
+    assert "LogisticRegression" in specs and "RandomForest" in specs
+
+
+def test_evaluate_model_returns_all_metrics(processed_sample):
+    from sklearn.linear_model import LogisticRegression
+
+    X_train, X_test, y_train, y_test = split_data(processed_sample, target="default")
+    model = LogisticRegression(max_iter=1000).fit(X_train, y_train)
+    metrics = evaluate_model(model, X_test, y_test)
+    assert set(metrics) == {"accuracy", "precision", "recall", "f1", "roc_auc"}
+    assert all(0.0 <= v <= 1.0 for v in metrics.values())
+
 

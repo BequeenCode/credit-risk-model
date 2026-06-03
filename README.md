@@ -260,6 +260,42 @@ print(info["high_risk_cluster"], labels.mean())  # cluster id, high-risk rate
 
 ---
 
+## Model Training & Tracking (Task 5)
+
+`src/train.py` trains and compares two classifiers on the processed dataset,
+with hyperparameter tuning, MLflow experiment tracking, full evaluation, and
+Model Registry registration.
+
+| Step | Implementation |
+|------|----------------|
+| Reproducible split | `split_data()` — stratified 80/20, `random_state=42`; drops **both** target columns to prevent leakage |
+| Models (≥2) | Logistic Regression (interpretable baseline) + Random Forest (ensemble), both `class_weight="balanced"` for the imbalanced target |
+| Hyperparameter tuning | `GridSearchCV` (Logistic Regression) and `RandomizedSearchCV` (Random Forest), 5-fold CV, scored on ROC-AUC |
+| Experiment tracking | MLflow logs params, metrics, and model artifacts per run |
+| Evaluation | accuracy, precision, recall, F1, ROC-AUC (`evaluate_model()`) |
+| Model selection & registry | Best model by ROC-AUC saved to `models/best_model.pkl` **and** registered as `credit-risk-best-model` in the MLflow Model Registry |
+
+### Run it
+
+```bash
+python src/train.py                      # train on the actual `default` label
+python src/train.py --target is_high_risk  # train on the Task 4 proxy instead
+
+mlflow ui                                # browse/compare runs at http://localhost:5000
+```
+
+> MLflow is an optional dependency: if it is not installed, training still runs
+> and the best model is saved to disk — only the tracking/registry steps are
+> skipped.
+
+**Note on metrics.** This is synthetic data with a weak, mostly-noise signal and
+a ~11% default rate, so ROC-AUC sits around 0.63 and precision is low — honest
+for this dataset. `class_weight="balanced"` is used so the models actually
+identify defaulters (non-zero recall) instead of collapsing to the majority
+class.
+
+---
+
 ## References
 
 - Basel Committee on Banking Supervision. (2004). *International Convergence of Capital Measurement and Capital Standards*.
