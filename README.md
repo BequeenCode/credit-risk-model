@@ -260,6 +260,91 @@ print(info["high_risk_cluster"], labels.mean())  # cluster id, high-risk rate
 
 ---
 
+## Model Training & Tracking (Task 5)
+
+`src/train.py` trains and compares two classifiers on the processed dataset,
+with hyperparameter tuning, MLflow experiment tracking, full evaluation, and
+Model Registry registration.
+
+| Step | Implementation |
+|------|----------------|
+| Reproducible split | `split_data()` — stratified 80/20, `random_state=42`; drops **both** target columns to prevent leakage |
+| Models (≥2) | Logistic Regression (interpretable baseline) + Random Forest (ensemble), both `class_weight="balanced"` for the imbalanced target |
+| Hyperparameter tuning | `GridSearchCV` (Logistic Regression) and `RandomizedSearchCV` (Random Forest), 5-fold CV, scored on ROC-AUC |
+| Experiment tracking | MLflow logs params, metrics, and model artifacts per run |
+| Evaluation | accuracy, precision, recall, F1, ROC-AUC (`evaluate_model()`) |
+| Model selection & registry | Best model by ROC-AUC saved to `models/best_model.pkl` **and** registered as `credit-risk-best-model` in the MLflow Model Registry |
+
+### Run it
+
+```bash
+python src/train.py                      # train on the actual `default` label
+python src/train.py --target is_high_risk  # train on the Task 4 proxy instead
+
+mlflow ui                                # browse/compare runs at http://localhost:5000
+```
+
+> MLflow is an optional dependency: if it is not installed, training still runs
+> and the best model is saved to disk — only the tracking/registry steps are
+> skipped.
+
+**Note on metrics.** This is synthetic data with a weak, mostly-noise signal and
+a ~11% default rate, so ROC-AUC sits around 0.63 and precision is low — honest
+for this dataset. `class_weight="balanced"` is used so the models actually
+identify defaulters (non-zero recall) instead of collapsing to the majority
+class.
+
+---
+
+## Deployment & CI/CD (Task 6)
+
+The best model is served behind a FastAPI REST API, containerised with Docker,
+and guarded by a GitHub Actions CI pipeline.
+
+### API (`src/api/`)
+
+| File | Role |
+|------|------|
+| `main.py` | FastAPI app. Loads the best model from the **MLflow Model Registry** (`credit-risk-best-model`), falling back to the local `models/best_model.pkl`. Endpoints: `GET /health`, `POST /predict`, plus interactive docs at `/docs`. |
+| `pydantic_models.py` | Request (`CustomerData`) and response (`PredictionResponse`) schemas with full field validation. |
+
+`/predict` accepts **raw customer fields**, runs them through the fitted feature
+pipeline (Task 3) and then the model, and returns a calibrated risk probability:
+
+```bash
+uvicorn src.api.main:app --reload      # http://localhost:8000/docs
+
+curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{
+  "age": 45, "income": 60000, "loan_amount": 150000, "loan_term": 36,
+  "interest_rate": 5.5, "employment_years": 8, "num_accounts": 5,
+  "num_delinquencies": 0, "credit_score": 650, "employment_type": "Employed",
+  "home_ownership": "Mortgage", "loan_purpose": "Auto"
+}'
+# -> {"risk_probability": 0.436, "risk_label": 0, "threshold": 0.5}
+```
+
+### Containerisation
+
+```bash
+docker compose up --build      # builds the image and serves on :8000
+```
+
+`Dockerfile` installs dependencies, copies `src/` and `models/`, and runs
+uvicorn. `docker-compose.yml` mounts `./models` read-only so a retrained model
+is picked up without rebuilding.
+
+### Continuous Integration (`.github/workflows/ci.yml`)
+
+On every push / PR to `main`, GitHub Actions:
+
+1. installs dependencies,
+2. **lints** with `flake8` (config in `setup.cfg`),
+3. builds the processed dataset + trains the model, then runs **`pytest`**.
+
+The build fails if either the linter or the tests fail.
+
+---
+
 ## References
 
 - Basel Committee on Banking Supervision. (2004). *International Convergence of Capital Measurement and Capital Standards*.
