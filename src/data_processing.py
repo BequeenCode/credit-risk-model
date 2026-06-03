@@ -1,9 +1,10 @@
 """
-Feature Engineering Pipeline - Credit Risk Model (Task 3)
-=========================================================
+Feature Engineering & Proxy Target Pipeline - Credit Risk Model (Tasks 3 & 4)
+============================================================================
 
 Builds a single, reproducible ``sklearn.pipeline.Pipeline`` that transforms the
-raw credit dataset into a model-ready ``DataFrame``.
+raw credit dataset into a model-ready ``DataFrame`` (Task 3), and engineers a
+behavioural ``is_high_risk`` proxy target via RFM + K-Means (Task 4).
 
 Note on data grain
 -------------------
@@ -39,6 +40,7 @@ import numpy as np
 import pandas as pd
 import joblib
 from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.cluster import KMeans
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
@@ -56,6 +58,23 @@ ID_COLUMN = "loan_id"
 
 # Raw categorical columns expected in the dataset.
 CATEGORICAL_FEATURES = ["employment_type", "home_ownership", "loan_purpose"]
+
+# --- Task 4: proxy target configuration -----------------------------------
+# Name of the engineered proxy target column.
+PROXY_TARGET = "is_high_risk"
+
+# RFM analogues (see ``build_proxy_target`` docstring). The brief's RFM is
+# defined on transaction history (CustomerId, transaction dates, amounts),
+# which this loan-level dataset does not have. We map the engagement intent
+# of each RFM axis onto the behavioural columns that do exist:
+#   Recency   -> employment_years   (stability / recency of stable income)
+#   Frequency -> num_accounts       (breadth of credit activity)
+#   Monetary  -> income             (financial capacity)
+RFM_RECENCY = "employment_years"
+RFM_FREQUENCY = "num_accounts"
+RFM_MONETARY = "income"
+RFM_RANDOM_STATE = 42
+RFM_N_CLUSTERS = 3
 
 
 # ---------------------------------------------------------------------------
@@ -331,6 +350,96 @@ def build_pipeline(target=TARGET, woe_n_bins=10):
 
 
 # ---------------------------------------------------------------------------
+# Task 4 - Proxy target via RFM + K-Means
+# ---------------------------------------------------------------------------
+def build_proxy_target(
+    df,
+    recency=RFM_RECENCY,
+    frequency=RFM_FREQUENCY,
+    monetary=RFM_MONETARY,
+    n_clusters=RFM_N_CLUSTERS,
+    random_state=RFM_RANDOM_STATE,
+):
+    """Engineer a binary ``is_high_risk`` proxy target via RFM + K-Means.
+
+    Note on data grain
+    ------------------
+    The brief defines RFM on *transaction history* (``CustomerId``, transaction
+    dates, transaction amounts) and asks for a snapshot date to compute
+    Recency. This project's data is loan-level and has none of those columns,
+    but it has a real ``default`` label. We therefore keep the method exactly as
+    prescribed - build an engagement profile, scale it, cluster with K-Means
+    into ``n_clusters`` groups (fixed ``random_state`` for reproducibility),
+    and flag the least-engaged cluster as high-risk - while mapping each RFM
+    axis onto the behavioural proxy that exists per loan:
+
+        Recency   -> ``employment_years``  (more tenure  = more engaged)
+        Frequency -> ``num_accounts``      (more accounts = more engaged)
+        Monetary  -> ``income``            (more income   = more engaged)
+
+    The least-engaged cluster (low on all three) is labelled ``is_high_risk = 1``.
+
+    Parameters
+    ----------
+    df : DataFrame
+        Raw loan data containing the three proxy columns.
+    n_clusters : int
+        Number of K-Means segments (3 per the brief).
+    random_state : int
+        Seed for reproducible clustering.
+
+    Returns
+    -------
+    (labels, info) : (Series, dict)
+        ``labels`` is an int ``is_high_risk`` Series aligned to ``df``'s index.
+        ``info`` carries the cluster profile table and the chosen high-risk
+        cluster id for reporting / auditing.
+    """
+    rfm_cols = [recency, frequency, monetary]
+    missing = [c for c in rfm_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Proxy-target columns not found in data: {missing}")
+
+    # Median-impute the proxy features so clustering sees no NaNs.
+    rfm = df[rfm_cols].copy()
+    rfm = rfm.fillna(rfm.median(numeric_only=True))
+
+    # Scale before K-Means so no single axis dominates the distance metric.
+    scaler = StandardScaler()
+    rfm_scaled = scaler.fit_transform(rfm)
+
+    kmeans = KMeans(n_clusters=n_clusters, random_state=random_state, n_init=10)
+    cluster_ids = kmeans.fit_predict(rfm_scaled)
+
+    # Profile each cluster on the original (unscaled) RFM means.
+    profile = (
+        rfm.assign(cluster=cluster_ids)
+        .groupby("cluster")
+        .mean()
+    )
+    profile["size"] = pd.Series(cluster_ids).value_counts().sort_index()
+
+    # Least-engaged = lowest combined rank across all three engagement axes.
+    # Rank each axis ascending (low value -> low rank); the cluster with the
+    # smallest summed rank is the most disengaged / highest risk.
+    engagement_rank = profile[rfm_cols].rank().sum(axis=1)
+    high_risk_cluster = int(engagement_rank.idxmin())
+
+    labels = pd.Series(
+        (cluster_ids == high_risk_cluster).astype(int),
+        index=df.index,
+        name=PROXY_TARGET,
+    )
+
+    info = {
+        "profile": profile,
+        "high_risk_cluster": high_risk_cluster,
+        "rfm_columns": rfm_cols,
+    }
+    return labels, info
+
+
+# ---------------------------------------------------------------------------
 # I/O helpers + entry point
 # ---------------------------------------------------------------------------
 def load_raw_data(path=RAW_DATA_PATH):
@@ -343,7 +452,7 @@ def main():
     print("FEATURE ENGINEERING PIPELINE - CREDIT RISK MODEL")
     print("=" * 80)
 
-    print(f"\n[1/4] Loading raw data from {RAW_DATA_PATH} ...")
+    print(f"\n[1/5] Loading raw data from {RAW_DATA_PATH} ...")
     df = load_raw_data()
     print(f"  Loaded {df.shape[0]} rows, {df.shape[1]} columns")
 
@@ -353,7 +462,7 @@ def main():
     X = df.drop(columns=[TARGET])
     y = df[TARGET]
 
-    print("\n[2/4] Fitting feature pipeline ...")
+    print("\n[2/5] Fitting feature pipeline ...")
     pipeline = build_pipeline(target=TARGET)
     X_model = pipeline.fit_transform(X, y)
     print(f"  Model-ready matrix: {X_model.shape[0]} rows, {X_model.shape[1]} features")
@@ -364,14 +473,34 @@ def main():
     print("\n  Information Value (predictive strength) ranking:")
     print(iv_table.to_string(index=False))
 
-    print("\n[3/4] Writing processed dataset ...")
+    print("\n[3/5] Building proxy target (RFM + K-Means) ...")
+    proxy, info = build_proxy_target(df)
+    print(f"  RFM proxy columns: {info['rfm_columns']}")
+    print(f"  High-risk cluster: {info['high_risk_cluster']} "
+          f"(least-engaged segment)")
+    print("\n  Cluster engagement profile (original RFM means):")
+    print(info["profile"].round(2).to_string())
+    rate = proxy.mean()
+    print(f"\n  '{PROXY_TARGET}' rate: {rate:.1%} "
+          f"({int(proxy.sum())} of {len(proxy)} loans)")
+
+    # Audit only: how the proxy lines up with the real default label. The proxy
+    # is engagement-based, so this is a sanity check, not a fit metric.
+    overlap = pd.crosstab(proxy, y, normalize="index")
+    print("\n  Proxy vs. actual default (row-normalised, audit only):")
+    print(overlap.round(3).to_string())
+
+    print("\n[4/5] Writing processed dataset ...")
     os.makedirs(os.path.dirname(PROCESSED_DATA_PATH), exist_ok=True)
     processed = X_model.copy()
+    # Integrate both the actual label and the engineered proxy target.
     processed[TARGET] = y.reset_index(drop=True)
+    processed[PROXY_TARGET] = proxy.reset_index(drop=True)
     processed.to_csv(PROCESSED_DATA_PATH, index=False)
-    print(f"  Saved -> {PROCESSED_DATA_PATH}")
+    print(f"  Saved -> {PROCESSED_DATA_PATH} "
+          f"(includes '{PROXY_TARGET}' target column)")
 
-    print("\n[4/4] Persisting fitted pipeline ...")
+    print("\n[5/5] Persisting fitted pipeline ...")
     os.makedirs(os.path.dirname(PIPELINE_PATH), exist_ok=True)
     joblib.dump(pipeline, PIPELINE_PATH)
     print(f"  Saved -> {PIPELINE_PATH}")

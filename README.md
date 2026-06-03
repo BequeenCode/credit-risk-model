@@ -207,6 +207,59 @@ logistic-regression scorecard.
 
 ---
 
+## Proxy Target Engineering (Task 4)
+
+Since the brief assumes a dataset with no `default` label, it asks us to
+*construct* a credit-risk target from behavioural engagement using **RFM +
+K-Means**. `build_proxy_target()` in `src/data_processing.py` does this and adds
+a binary `is_high_risk` column to the processed dataset.
+
+> **Data-grain note.** RFM (Recency, Frequency, Monetary) is normally computed
+> from transaction history — `CustomerId`, transaction dates, and amounts —
+> relative to a snapshot date. This loan-level dataset has none of those
+> columns (and already carries a real `default` label). The method is kept
+> exactly as prescribed — profile → scale → `KMeans(3, random_state=42)` →
+> flag the least-engaged cluster — while each RFM axis is mapped onto the
+> behavioural proxy that exists per loan:
+>
+> | RFM axis | Proxy column | Interpretation |
+> |----------|--------------|----------------|
+> | Recency | `employment_years` | longer stable tenure = more engaged |
+> | Frequency | `num_accounts` | more credit accounts = more active |
+> | Monetary | `income` | higher income = greater capacity |
+
+### Method
+1. **Build the engagement profile** from the three proxy columns (median-imputed).
+2. **Scale** with `StandardScaler` so no axis dominates the distance metric.
+3. **Cluster** into 3 segments with `KMeans(random_state=42, n_init=10)` for
+   reproducibility.
+4. **Identify the high-risk cluster** as the one ranking lowest across all three
+   engagement axes (low tenure, few accounts, low income).
+5. **Assign `is_high_risk`** = 1 for that cluster, 0 otherwise, and **merge** it
+   into `data/processed/credit_data_processed.csv` alongside the actual label.
+
+The script also prints an **audit cross-tab** of the engagement proxy against
+the real `default` label. On this synthetic data the two do **not** align
+closely (default here is driven by credit score and delinquencies, not
+engagement) — a concrete illustration of the *proxy risk* discussed in the
+Business Understanding section: a proxy can diverge from true default, so any
+proxy-trained model must be revalidated against actual defaults.
+
+### Run it
+
+```bash
+python src/data_processing.py   # adds the is_high_risk column to the processed CSV
+```
+
+```python
+from src.data_processing import build_proxy_target, load_raw_data
+
+labels, info = build_proxy_target(load_raw_data())
+print(info["high_risk_cluster"], labels.mean())  # cluster id, high-risk rate
+```
+
+---
+
 ## References
 
 - Basel Committee on Banking Supervision. (2004). *International Convergence of Capital Measurement and Capital Standards*.

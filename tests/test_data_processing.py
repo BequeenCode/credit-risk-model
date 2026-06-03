@@ -12,6 +12,7 @@ from src.data_processing import (
     FeatureEngineer,
     WoEEncoder,
     build_pipeline,
+    build_proxy_target,
     load_raw_data,
 )
 
@@ -134,3 +135,61 @@ def test_pipeline_on_real_data():
     out = build_pipeline().fit_transform(X, y)
     assert out.shape[0] == len(df)
     assert not out.isnull().any().any()
+
+
+# ---------------------------------------------------------------------------
+# Task 4 - proxy target (RFM + K-Means)
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def rfm_sample():
+    """Three clearly separable engagement segments for K-Means.
+
+    Rows 0-3   : disengaged (low tenure, few accounts, low income) -> high risk
+    Rows 4-7   : mid engagement
+    Rows 8-11  : highly engaged (high on all axes)
+    """
+    return pd.DataFrame({
+        "employment_years": [0.0, 1.0, 0.5, 1.0, 6.0, 7.0, 6.5, 7.0, 15.0, 16.0, 14.0, 15.0],
+        "num_accounts":     [1,   2,   1,   2,   7,   8,   7,   8,   13,   14,   13,   14],
+        "income":           [20000, 22000, 21000, 20000, 55000, 56000, 54000, 55000, 90000, 92000, 91000, 90000],
+    })
+
+
+def test_proxy_target_is_binary_and_aligned(rfm_sample):
+    labels, info = build_proxy_target(rfm_sample)
+    assert labels.name == "is_high_risk"
+    assert set(labels.unique()) <= {0, 1}
+    assert len(labels) == len(rfm_sample)
+    assert labels.index.equals(rfm_sample.index)
+
+
+def test_proxy_flags_least_engaged_segment(rfm_sample):
+    labels, info = build_proxy_target(rfm_sample)
+    # The first four rows are the disengaged segment -> should be high risk.
+    assert labels.iloc[:4].sum() == 4
+    # The most-engaged segment (last four) must not be high risk.
+    assert labels.iloc[8:].sum() == 0
+
+
+def test_proxy_target_is_reproducible(rfm_sample):
+    first, _ = build_proxy_target(rfm_sample, random_state=42)
+    second, _ = build_proxy_target(rfm_sample, random_state=42)
+    pd.testing.assert_series_equal(first, second)
+
+
+def test_proxy_target_handles_missing_values():
+    df = pd.DataFrame({
+        "employment_years": [0.0, np.nan, 6.0, 15.0, 16.0],
+        "num_accounts":     [1,   2,      7,   13,   14],
+        "income":           [20000, 22000, 55000, 90000, 92000],
+    })
+    labels, _ = build_proxy_target(df, n_clusters=3)
+    assert not labels.isnull().any()
+    assert set(labels.unique()) <= {0, 1}
+
+
+def test_proxy_target_missing_column_raises():
+    df = pd.DataFrame({"employment_years": [1.0], "num_accounts": [2]})
+    with pytest.raises(ValueError):
+        build_proxy_target(df)  # 'income' column absent
+
