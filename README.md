@@ -296,6 +296,55 @@ class.
 
 ---
 
+## Deployment & CI/CD (Task 6)
+
+The best model is served behind a FastAPI REST API, containerised with Docker,
+and guarded by a GitHub Actions CI pipeline.
+
+### API (`src/api/`)
+
+| File | Role |
+|------|------|
+| `main.py` | FastAPI app. Loads the best model from the **MLflow Model Registry** (`credit-risk-best-model`), falling back to the local `models/best_model.pkl`. Endpoints: `GET /health`, `POST /predict`, plus interactive docs at `/docs`. |
+| `pydantic_models.py` | Request (`CustomerData`) and response (`PredictionResponse`) schemas with full field validation. |
+
+`/predict` accepts **raw customer fields**, runs them through the fitted feature
+pipeline (Task 3) and then the model, and returns a calibrated risk probability:
+
+```bash
+uvicorn src.api.main:app --reload      # http://localhost:8000/docs
+
+curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{
+  "age": 45, "income": 60000, "loan_amount": 150000, "loan_term": 36,
+  "interest_rate": 5.5, "employment_years": 8, "num_accounts": 5,
+  "num_delinquencies": 0, "credit_score": 650, "employment_type": "Employed",
+  "home_ownership": "Mortgage", "loan_purpose": "Auto"
+}'
+# -> {"risk_probability": 0.436, "risk_label": 0, "threshold": 0.5}
+```
+
+### Containerisation
+
+```bash
+docker compose up --build      # builds the image and serves on :8000
+```
+
+`Dockerfile` installs dependencies, copies `src/` and `models/`, and runs
+uvicorn. `docker-compose.yml` mounts `./models` read-only so a retrained model
+is picked up without rebuilding.
+
+### Continuous Integration (`.github/workflows/ci.yml`)
+
+On every push / PR to `main`, GitHub Actions:
+
+1. installs dependencies,
+2. **lints** with `flake8` (config in `setup.cfg`),
+3. builds the processed dataset + trains the model, then runs **`pytest`**.
+
+The build fails if either the linter or the tests fail.
+
+---
+
 ## References
 
 - Basel Committee on Banking Supervision. (2004). *International Convergence of Capital Measurement and Capital Standards*.

@@ -1,0 +1,21 @@
+services:
+  credit-risk-api:
+    build: .
+    container_name: credit-risk-api
+    ports:
+      - "8000:8000"
+    environment:
+      # Use the local pickled model inside the image by default. To point at a
+      # remote MLflow registry instead, set MLFLOW_TRACKING_URI here.
+      - LOCAL_MODEL_PATH=models/best_model.pkl
+      - FEATURE_PIPELINE_PATH=models/feature_pipeline.pkl
+      - DECISION_THRESHOLD=0.5
+    volumes:
+      # Mount models so a freshly trained model is picked up without rebuilding.
+      - ./models:/app/models:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped

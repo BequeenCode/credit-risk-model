@@ -247,5 +247,3 @@ def test_evaluate_model_returns_all_metrics(processed_sample):
     metrics = evaluate_model(model, X_test, y_test)
     assert set(metrics) == {"accuracy", "precision", "recall", "f1", "roc_auc"}
     assert all(0.0 <= v <= 1.0 for v in metrics.values())
-
-

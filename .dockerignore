@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.git/
+.github/
+notebooks/
+reports/
+data/
+tests/
+mlruns/
+mlartifacts/
+*.md
+.gitignore
+.dockerignore
+venv/
+.venv/
