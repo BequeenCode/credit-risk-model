@@ -148,6 +148,65 @@ pip install -r requirements.txt
 
 ---
 
+## Feature Engineering (Task 3)
+
+`src/data_processing.py` implements the full, reproducible feature-engineering
+flow as a single `sklearn.pipeline.Pipeline` object that maps raw input to a
+model-ready `DataFrame`.
+
+> **Data-grain note.** The brief is written for a *transaction-level* dataset
+> (per-customer aggregations, transaction timestamps). This project's data is
+> *loan-level* — one row per loan, with a real `default` label and no
+> transaction or datetime columns. The engineering intent is adapted faithfully
+> to the available data: per-loan financial ratios and bands stand in for the
+> per-customer transaction aggregates and datetime parts.
+
+### Pipeline stages
+
+| Stage | Implementation | Brief requirement |
+|-------|----------------|-------------------|
+| Derived / "aggregate" features | `FeatureEngineer` — `debt_to_income`, `monthly_installment`, `installment_to_income`, `accounts_per_year_employed`, `total_interest_ratio` | Create aggregate features |
+| Extracted bands / flags | `FeatureEngineer` — `has_delinquency`, `credit_score_band` | Extract features |
+| Missing-value handling | `SimpleImputer` (median for numeric, most-frequent for categorical) | Handle missing values |
+| Categorical encoding | `OneHotEncoder(handle_unknown="ignore")` | Encode categorical variables |
+| Scaling | `StandardScaler` (mean 0, std 1) | Normalize / standardize |
+| WoE / IV | `WoEEncoder` (custom) with Information Value reporting | Feature engineering with WoE & IV |
+
+All stages are composed in `build_pipeline()` and fit together. The fitted
+pipeline is pickled to `models/feature_pipeline.pkl` for reuse at inference time.
+
+### Run it
+
+```bash
+# Fit the pipeline, write the model-ready dataset, and persist the pipeline
+python src/data_processing.py
+#   -> data/processed/credit_data_processed.csv
+#   -> models/feature_pipeline.pkl
+
+# Run the unit tests
+pytest tests/ -v
+```
+
+```python
+# Reuse the fitted pipeline programmatically
+import joblib
+from src.data_processing import load_raw_data
+
+pipe = joblib.load("models/feature_pipeline.pkl")
+X = load_raw_data().drop(columns=["default"])
+X_model = pipe.transform(X)   # model-ready DataFrame, no NaNs
+```
+
+A note on **Weight of Evidence / Information Value**: rather than depend on
+`xverse`/`woe` (which lag recent scikit-learn/pandas releases), WoE is
+implemented natively in `WoEEncoder` with Laplace smoothing to avoid `ln(0)`,
+quantile binning for numeric features, and a `MISSING` bin so missing values
+receive their own evidence weight. `WoEEncoder.get_iv_table()` returns features
+ranked by Information Value — the standard interpretability artifact for a
+logistic-regression scorecard.
+
+---
+
 ## References
 
 - Basel Committee on Banking Supervision. (2004). *International Convergence of Capital Measurement and Capital Standards*.
